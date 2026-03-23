@@ -21,6 +21,11 @@
       } catch(e) {}
     })();
   </script>
+  <style>
+    /* Critical theme colors — prevents white flash before Vite CSS loads */
+    html { background-color: #f7eedc; }
+    html[data-theme="dark"] { background-color: #1c1b16; color-scheme: dark; }
+  </style>
 
   @stack('dumper')
   @viteReactRefresh()

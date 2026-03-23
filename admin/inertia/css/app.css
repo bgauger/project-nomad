@@ -50,6 +50,10 @@
   --color-btn-green-active: #2a2a15;
 }
 
+html {
+  background-color: var(--color-desert-sand);
+}
+
 body {
   background-color: var(--color-desert-sand);
   color: var(--color-text-primary);
