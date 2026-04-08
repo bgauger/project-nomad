@@ -59,6 +59,17 @@ export function getPrimaryDiskInfo(
   disks: NomadDiskInfo[] | undefined,
   fsSize: Systeminformation.FsSizeData[] | undefined
 ): { totalSize: number; totalUsed: number } | null {
+  // First, check if /app/storage is on a dedicated filesystem (e.g. NFS mount).
+  // This is the most accurate source since it reflects the actual backing
+  // store for NOMAD content, regardless of whether it's a local disk or
+  // network-attached storage.
+  if (fsSize) {
+    const storageMount = fsSize.find((fs) => fs.mount === '/app/storage')
+    if (storageMount && storageMount.size > 0) {
+      return { totalSize: storageMount.size, totalUsed: storageMount.used }
+    }
+  }
+
   const validDisks = disks?.filter((d) => d.totalSize > 0) || []
   if (validDisks.length > 0) {
     const diskWithRoot = validDisks.find((d) =>
