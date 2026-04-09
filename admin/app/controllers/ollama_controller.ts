@@ -237,17 +237,21 @@ export default class OllamaController {
         })
         .join('\n')
 
-      const installedModels = await this.ollamaService.getModels(true)
-      const rewriteModelAvailable = installedModels?.some(model => model.name === DEFAULT_QUERY_REWRITE_MODEL)
-      if (!rewriteModelAvailable) {
-        logger.warn(`[RAG] Query rewrite model "${DEFAULT_QUERY_REWRITE_MODEL}" not available. Skipping query rewriting.`)
+      const installedModels = await this.ollamaService.getModels(false)
+      const preferredModel = installedModels?.find(model => model.name === DEFAULT_QUERY_REWRITE_MODEL)
+      const rewriteModel = preferredModel?.name ?? installedModels?.[0]?.name
+      if (!rewriteModel) {
+        logger.warn('[RAG] No models available for query rewriting. Skipping query rewriting.')
         const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user')
         return lastUserMessage?.content || null
       }
 
-      // FUTURE ENHANCEMENT: allow the user to specify which model to use for rewriting
+      if (!preferredModel) {
+        logger.info(`[RAG] Query rewrite model "${DEFAULT_QUERY_REWRITE_MODEL}" not available. Falling back to "${rewriteModel}".`)
+      }
+
       const response = await this.ollamaService.chat({
-        model: DEFAULT_QUERY_REWRITE_MODEL,
+        model: rewriteModel,
         messages: [
           {
             role: 'system',
