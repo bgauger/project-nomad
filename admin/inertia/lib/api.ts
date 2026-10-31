@@ -1146,23 +1146,6 @@ class API {
     })()
   }
 
-  async getNomadMd() {
-    return catchInternal(async () => {
-      const response = await this.client.get<{ content: string }>('/ai/nomad-md')
-      return response.data
-    })()
-  }
-
-  async saveNomadMd(content: string) {
-    return catchInternal(async () => {
-      const response = await this.client.put<{ success: boolean; message: string }>(
-        '/ai/nomad-md',
-        { content }
-      )
-      return response.data
-    })()
-  }
-
   async preflightCheck(service_name: string) {
     return catchInternal(async () => {
       const response = await this.client.get<{
@@ -1218,31 +1201,11 @@ class API {
     })()
   }
 
-  async setServiceCustomUrl(service_name: string, custom_url: string | null) {
-    return catchInternal(async () => {
-      const response = await this.client.put<{ success: boolean; custom_url: string | null }>(
-        '/system/services/custom-url',
-        { service_name, custom_url }
-      )
-      return response.data
-    })()
-  }
-
   async deleteCustomApp(service_name: string, remove_image = false) {
     return catchInternal(async () => {
       const response = await this.client.delete<{ success: boolean; message: string }>(
         '/system/services/custom',
         { data: { service_name, remove_image } }
-      )
-      return response.data
-    })()
-  }
-
-  async uninstallService(service_name: string, remove_image = false) {
-    return catchInternal(async () => {
-      const response = await this.client.post<{ success: boolean; message: string }>(
-        '/system/services/uninstall',
-        { service_name, remove_image }
       )
       return response.data
     })()

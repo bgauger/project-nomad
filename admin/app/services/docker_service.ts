@@ -1992,34 +1992,6 @@ export class DockerService {
     }
   }
 
-  /**
-   * Uninstall a curated catalog app: stop and remove its container (and, optionally, its image),
-   * then mark the record not-installed so the card returns to the available catalog. Host
-   * bind-mount data is deliberately left on disk — a later reinstall picks it back up. Contrast
-   * with forceReinstall, which clears volumes and immediately recreates the container.
-   */
-  async uninstallService(
-    serviceName: string,
-    removeImage = false
-  ): Promise<{ success: boolean; message: string }> {
-    const service = await Service.query().where('service_name', serviceName).first()
-    if (!service || !service.installed) {
-      return { success: false, message: `Service ${serviceName} not found or not installed` }
-    }
-
-    // Container/image removal is shared with custom-app deletion — the lookup is by container
-    // name, which is the service_name for curated and custom apps alike.
-    const removal = await this.removeCustomAppContainer(serviceName, removeImage)
-    if (!removal.success) return removal
-
-    service.installed = false
-    service.installation_status = 'idle'
-    await service.save()
-    this.invalidateServicesStatusCache()
-
-    return { success: true, message: `Service ${serviceName} uninstalled` }
-  }
-
   /** Find a container by its managed service name (`/serviceName`), or null. */
   private async _findContainerByName(serviceName: string) {
     const containers = await this.docker.listContainers({ all: true })
@@ -2175,14 +2147,6 @@ export class DockerService {
     const oldInfo = await this._findContainerByName(serviceName)
     const oldName = `${serviceName}_old`
 
-    // Clear any stale `_old` left behind by a previous recreate that died mid-flight. Without this,
-    // the rename below would fail (name in use) and the rollback path would then destroy the live
-    // container and resurrect the stale one in its place.
-    const staleOld = await this._findContainerByName(oldName)
-    if (staleOld) {
-      await this.docker.getContainer(staleOld.Id).remove({ force: true }).catch(() => {})
-    }
-
     try {
       // Stop + rename the existing container aside as a rollback safety net.
       if (oldInfo) {
@@ -2193,18 +2157,8 @@ export class DockerService {
 
       // Pull the image if it's missing locally, or always when forcePull (e.g. :latest updates).
       if (opts.forcePull || !(await this._checkImageExists(service.container_image))) {
-        await this.pullImage(service.container_image)
-      }
-
-      // Runtime-injected secrets (e.g. Homebox's API-key pepper, #1043) live in the KV store, not
-      // in container_config. This path rebuilds Env from container_config alone, so re-inject them
-      // here — otherwise an Edit or in-place recreate drops the pepper and Homebox crash-loops again.
-      let recreateEnv: string[] = containerConfig?.Env ?? []
-      if (
-        serviceName === SERVICE_NAMES.HOMEBOX &&
-        !recreateEnv.some((e: string) => e.startsWith('HBOX_AUTH_API_KEY_PEPPER='))
-      ) {
-        recreateEnv = [...recreateEnv, `HBOX_AUTH_API_KEY_PEPPER=${await this._resolveHomeboxPepper()}`]
+        const pullStream = await this.docker.pull(service.container_image)
+        await new Promise((res) => this.docker.modem.followProgress(pullStream, res))
       }
 
       const newContainer = await this.docker.createContainer({
@@ -2218,7 +2172,7 @@ export class DockerService {
         ...(containerConfig?.User && { User: containerConfig.User }),
         HostConfig: containerConfig?.HostConfig ?? {},
         ...(containerConfig?.ExposedPorts && { ExposedPorts: containerConfig.ExposedPorts }),
-        ...(recreateEnv.length ? { Env: recreateEnv } : {}),
+        ...(containerConfig?.Env && { Env: containerConfig.Env }),
         ...(service.container_command ? { Cmd: service.container_command.split(' ') } : {}),
         ...(process.env.NODE_ENV === 'production' && {
           NetworkingConfig: { EndpointsConfig: { [DockerService.NOMAD_NETWORK]: {} } },

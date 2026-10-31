@@ -18,12 +18,8 @@ import {
   preflightValidator,
   serviceLogsValidator,
   subscribeToReleaseNotesValidator,
-  uninstallServiceValidator,
   updateCustomAppValidator,
   updateServiceValidator,
-  setServiceAutoUpdateValidator,
-  setServiceCustomUrlValidator,
-  normalizeCustomUrl,
 } from '#validators/system'
 import {
   DEFAULT_CPUS,
@@ -468,67 +464,6 @@ export default class SystemController {
         return response.send({ success: true, message: `Custom app ${payload.service_name} deleted` })
     }
 
-    /** Uninstall a curated catalog app: stop + remove its container (optionally its image) and
-     * return the card to the available catalog. App data under the storage path stays on disk,
-     * so a later reinstall picks it back up. Custom apps are removed via deleteCustomApp instead,
-     * which also drops their DB record. */
-    async uninstallService({ request, response }: HttpContext) {
-        const payload = await request.validateUsing(uninstallServiceValidator)
-
-        const service = await Service.query().where('service_name', payload.service_name).first()
-        if (!service) {
-            return response.status(404).send({ error: `Service ${payload.service_name} not found` })
-        }
-        if (service.is_custom) {
-            return response.status(403).send({ error: 'Custom apps are removed via delete.' })
-        }
-        if (service.is_dependency_service) {
-            return response.status(403).send({ error: 'Dependency services cannot be uninstalled directly.' })
-        }
-        if (!service.installed) {
-            return response.status(409).send({ error: `Service ${payload.service_name} is not installed` })
-        }
-
-        const result = await this.dockerService.uninstallService(
-            payload.service_name,
-            payload.remove_image ?? false
-        )
-        if (!result.success) {
-            return response.status(500).send({ success: false, message: result.message })
-        }
-        return response.send({ success: true, message: result.message })
-    }
-
-    /** Set or clear an app's custom launch URL (works for curated and custom apps). Purely a
-     * metadata change — no container is touched. An empty/invalid value clears the override, after
-     * which the default host + port link is used again. */
-    async setServiceCustomUrl({ request, response }: HttpContext) {
-        const payload = await request.validateUsing(setServiceCustomUrlValidator)
-
-        const service = await Service.query().where('service_name', payload.service_name).first()
-        if (!service) {
-            return response.status(404).send({ success: false, message: `Service ${payload.service_name} not found` })
-        }
-        // Hidden dependency services (e.g. Qdrant) aren't user-launchable, so they have no link to set.
-        if (service.is_dependency_service) {
-            return response.status(403).send({ success: false, message: 'This service cannot be configured.' })
-        }
-
-        // Reject a non-empty value that isn't a valid http(s) URL; an empty value clears the override.
-        const normalized = normalizeCustomUrl(payload.custom_url)
-        if (payload.custom_url && payload.custom_url.trim() && !normalized) {
-            return response.status(422).send({
-                success: false,
-                message: 'Custom URL must be a valid http(s) address (e.g. https://jellyfin.myhomelab.net).',
-            })
-        }
-
-        service.custom_url = normalized
-        await service.save()
-
-        return response.send({ success: true, custom_url: service.custom_url })
-    }
-
     /** Re-pull a custom app's image and recreate its container in place (preserving volumes). */
     async updateCustomApp_pullLatest({ request, response }: HttpContext) {
         const payload = await request.validateUsing(installServiceValidator)
@@ -580,22 +515,19 @@ export default class SystemController {
         return response.send({ success: true, running: result.running ?? false, stats: result.stats ?? null })
     }
 
-    /** Return an app's current configuration in the editable form-shape. */
+    /** Return a custom app's current configuration in the editable form-shape. */
     async getCustomApp({ params, response }: HttpContext) {
         const service = await Service.query().where('service_name', params.name).first()
         if (!service) {
             return response.status(404).send({ error: `Service ${params.name} not found` })
         }
-        // Custom and curated apps are both editable; hidden dependency services (e.g. Qdrant) are not.
-        if (service.is_dependency_service) {
-            return response.status(403).send({ error: 'This service cannot be edited.' })
+        if (!service.is_custom) {
+            return response.status(403).send({ error: 'Only custom apps can be edited.' })
         }
         return response.send({ success: true, app: this.parseCustomContainerConfig(service) })
     }
 
-    /** Reconfigure an app: validate + guard, persist the new config, then recreate the container.
-     * Works for both custom apps and curated (pre-configured) apps. Editing a curated app marks it
-     * user-modified so the seeder stops overwriting the user's changes. */
+    /** Reconfigure a custom app: validate + guard, persist the new config, then recreate the container. */
     async updateCustomApp({ request, response }: HttpContext) {
         const payload = await request.validateUsing(updateCustomAppValidator)
 
@@ -603,9 +535,8 @@ export default class SystemController {
         if (!service) {
             return response.status(404).send({ success: false, message: `Service ${payload.service_name} not found` })
         }
-        // Custom and curated apps are both editable; hidden dependency services (e.g. Qdrant) are not.
-        if (service.is_dependency_service) {
-            return response.status(403).send({ success: false, message: 'This service cannot be edited.' })
+        if (!service.is_custom) {
+            return response.status(403).send({ success: false, message: 'Only custom apps can be edited.' })
         }
 
         // Reject duplicate host ports within the request.
@@ -642,26 +573,13 @@ export default class SystemController {
             }
         }
 
-        // Merge the form fields into the app's existing config rather than rebuilding from scratch,
-        // so advanced settings a curated app ships with (GPU device requests, special env, etc.) are
-        // preserved across an edit.
-        // Preserve an explicit scheme (e.g. ui_location "https:8480") across an edit — otherwise a
-        // TLS-serving app's Open link would silently revert to http after any reconfigure.
-        const prevScheme = (service.ui_location || '').match(/^(https?):\d+$/)?.[1]
-        const { containerConfig, uiLocation } = this.mergeCustomContainerConfig(
-            service.container_config,
-            payload
-        )
+        const { containerConfig, uiLocation } = this.buildCustomContainerConfig(payload)
         service.friendly_name = payload.friendly_name
         service.container_image = payload.image
         service.container_config = JSON.stringify(containerConfig)
-        service.ui_location = prevScheme && uiLocation && /^\d+$/.test(uiLocation)
-            ? `${prevScheme}:${uiLocation}`
-            : uiLocation
+        service.ui_location = uiLocation
         service.category = payload.category ?? service.category ?? 'custom'
         if (payload.icon) service.icon = payload.icon
-        // Flag as user-modified so the seeder stops overwriting this app's config on future runs.
-        service.is_user_modified = true
         await service.save()
 
         const result = await this.dockerService.recreateCustomAppContainer(payload.service_name)
@@ -708,66 +626,6 @@ export default class SystemController {
             },
             ExposedPorts: exposedPorts,
             ...(payload.env?.length ? { Env: payload.env } : {}),
-        }
-
-        const firstHostPort = payload.ports?.[0]?.host
-        const uiLocation = firstHostPort ? String(firstHostPort) : null
-        return { containerConfig, uiLocation }
-    }
-
-    /**
-     * Merge custom-app form input into an app's *existing* container config. Used by the edit path so
-     * editing a curated app only changes the fields exposed in the form (image/ports/volumes/env and,
-     * if supplied, resource caps) while preserving everything else it ships with (GPU DeviceRequests,
-     * User, custom HostConfig keys, etc.). Unlike buildCustomContainerConfig, resource caps are NOT
-     * defaulted here — a curated app intentionally left uncapped stays uncapped unless the user sets one.
-     */
-    private mergeCustomContainerConfig(
-        existingRaw: string | null,
-        payload: {
-            ports?: { container: number; host: number }[]
-            volumes?: { host_path: string; container_path: string }[]
-            env?: string[]
-            memory_mb?: number
-            cpus?: number
-        }
-    ): { containerConfig: Record<string, any>; uiLocation: string | null } {
-        const parsed = existingRaw
-            ? typeof existingRaw === 'object'
-                ? existingRaw
-                : JSON.parse(existingRaw as string)
-            : {}
-        // Deep clone so we never mutate the parsed source.
-        const containerConfig: Record<string, any> = JSON.parse(JSON.stringify(parsed ?? {}))
-        containerConfig.HostConfig = containerConfig.HostConfig ?? {}
-        // Keep a restart policy if the existing config lacked one.
-        containerConfig.HostConfig.RestartPolicy =
-            containerConfig.HostConfig.RestartPolicy ?? { Name: 'unless-stopped' }
-
-        const portBindings: Record<string, [{ HostPort: string }]> = {}
-        const exposedPorts: Record<string, {}> = {}
-        for (const { container, host } of payload.ports ?? []) {
-            portBindings[`${container}/tcp`] = [{ HostPort: String(host) }]
-            exposedPorts[`${container}/tcp`] = {}
-        }
-        containerConfig.HostConfig.PortBindings = portBindings
-        containerConfig.ExposedPorts = exposedPorts
-
-        const binds = (payload.volumes ?? []).map(
-            ({ host_path, container_path }) => `${host_path}:${container_path}`
-        )
-        if (binds.length) containerConfig.HostConfig.Binds = binds
-        else delete containerConfig.HostConfig.Binds
-
-        if (payload.env?.length) containerConfig.Env = payload.env
-        else delete containerConfig.Env
-
-        // Only touch resource caps when the user explicitly set them — preserve existing/uncapped otherwise.
-        if (payload.memory_mb != null) {
-            containerConfig.HostConfig.Memory = payload.memory_mb * 1024 * 1024
-        }
-        if (payload.cpus != null) {
-            containerConfig.HostConfig.NanoCpus = Math.round(payload.cpus * 1e9)
         }
 
         const firstHostPort = payload.ports?.[0]?.host

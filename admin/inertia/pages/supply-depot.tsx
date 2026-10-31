@@ -1,14 +1,10 @@
-import { Head, router } from '@inertiajs/react'
+import { Head } from '@inertiajs/react'
 import { useEffect, useRef, useState } from 'react'
 import {
   IconAlertTriangle,
-  IconArrowRight,
-  IconArrowUp,
-  IconBook,
   IconBox,
   IconBrandDocker,
   IconChartBar,
-  IconClockBolt,
   IconCloudDownload,
   IconFileText,
   IconPackage,
@@ -18,7 +14,6 @@ import {
   IconRefresh,
   IconSearch,
   IconTrash,
-  IconWorld,
 } from '@tabler/icons-react'
 import AppLayout from '~/layouts/AppLayout'
 import DynamicIcon, { DynamicIconName } from '~/components/DynamicIcon'
@@ -28,30 +23,15 @@ import InstallActivityFeed from '~/components/InstallActivityFeed'
 import LoadingSpinner from '~/components/LoadingSpinner'
 import Alert from '~/components/Alert'
 import CustomAppModal, { CustomAppInitial } from '~/components/CustomAppModal'
-import AppUrlModal from '~/components/AppUrlModal'
 import ServiceLogsModal from '~/components/ServiceLogsModal'
 import ServiceStatsModal from '~/components/ServiceStatsModal'
 import StyledSectionHeader from '~/components/StyledSectionHeader'
-import UpdateServiceModal from '~/components/UpdateServiceModal'
 import useErrorNotification from '~/hooks/useErrorNotification'
-import { useNotifications } from '~/context/NotificationContext'
-import useInternetStatus from '~/hooks/useInternetStatus'
-import { useAppAutoUpdateStatus } from '~/hooks/useAppAutoUpdateStatus'
 import useServiceInstallationActivity from '~/hooks/useServiceInstallationActivity'
-import { useTransmit } from 'react-adonis-transmit'
-import { BROADCAST_CHANNELS } from '../../constants/broadcast'
 import { ServiceSlim } from '../../types/services'
 import { getServiceLink } from '~/lib/navigation'
-import { getSupplyDepotDocLink } from '../../constants/supply_depot_docs'
 import api from '~/lib/api'
 import { toTitleCase } from '../../app/utils/misc'
-import { SERVICE_NAMES } from '../../constants/service_names'
-
-function extractTag(containerImage: string): string {
-  if (!containerImage) return ''
-  const parts = containerImage.split(':')
-  return parts.length > 1 ? parts[parts.length - 1] : 'latest'
-}
 
 const CATEGORIES = [
   { id: 'all', label: 'All' },
@@ -84,37 +64,22 @@ type Modal =
   | { type: 'restart'; service: ServiceSlim }
   | { type: 'reinstall'; service: ServiceSlim }
   | { type: 'delete'; service: ServiceSlim }
-  | { type: 'uninstall'; service: ServiceSlim }
   | { type: 'logs'; service: ServiceSlim }
   | { type: 'stats'; service: ServiceSlim }
-  | { type: 'update'; service: ServiceSlim }
   | null
 
 export default function SupplyDepotPage(props: { system: { services: ServiceSlim[] } }) {
   const { showError } = useErrorNotification()
-  const { addNotification } = useNotifications()
-  const { isOnline } = useInternetStatus()
-  const { subscribe } = useTransmit()
   const installActivity = useServiceInstallationActivity()
-  // Global master switch for app auto-updates (Settings → Updates). Per-app
-  // toggles are inert until this is on, so the UI reflects that state.
-  const { data: appAutoUpdateStatus } = useAppAutoUpdateStatus()
-  const appAutoUpdateMasterEnabled = appAutoUpdateStatus?.enabled ?? false
 
   const [activeCategory, setActiveCategory] = useState('all')
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState<Modal>(null)
   const [loading, setLoading] = useState(false)
-  const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [customAppOpen, setCustomAppOpen] = useState(false)
   const [editApp, setEditApp] = useState<CustomAppInitial | null>(null)
-  // App whose custom launch URL is being configured (null while the modal is closed).
-  const [urlApp, setUrlApp] = useState<ServiceSlim | null>(null)
   const [removeImage, setRemoveImage] = useState(false)
-  // Optimistic per-app auto-update toggle state, keyed by service_name. Lets the
-  // toggle reflect instantly without a full page reload (props come from Inertia).
-  const [autoUpdateOverrides, setAutoUpdateOverrides] = useState<Record<string, boolean>>({})
 
   // Preflight state — scoped to the current install modal
   const [preflight, setPreflight] = useState<{
@@ -133,18 +98,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
       setTimeout(() => window.location.reload(), 3000)
     }
   }, [installActivity])
-
-  // Listen for service update-check completion (manual or nightly), then reload so
-  // refreshed available_update_version values surface on the cards.
-  useEffect(() => {
-    const unsubscribe = subscribe(BROADCAST_CHANNELS.SERVICE_UPDATES, () => {
-      setCheckingUpdates(false)
-      window.location.reload()
-    })
-    return () => {
-      unsubscribe()
-    }
-  }, [])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -170,7 +123,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
       .then((res) => {
         if (res) setPreflight(res)
       })
-      .catch(() => { }) // non-fatal; proceed without warnings
+      .catch(() => {}) // non-fatal; proceed without warnings
       .finally(() => setPreflightLoading(false))
   }, [modal])
 
@@ -195,12 +148,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
   const installedServices = filteredServices.filter((s) => s.installed)
   const availableServices = filteredServices.filter((s) => !s.installed)
 
-  // Whether the new Kolibri (Gen 2) install exists — gates the "Migrate content to Gen 2" action on
-  // the legacy Kolibri card. Computed from the full (unfiltered) list so a search filter can't hide it.
-  const educationGen2Installed = props.system.services.some(
-    (s) => s.service_name === SERVICE_NAMES.KOLIBRI_GEN2 && s.installed
-  )
-
   // ── Actions ───────────────────────────────────────────────────────────────
   async function handleInstall(service: ServiceSlim) {
     const hasWarnings =
@@ -208,61 +155,38 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
 
     if (hasWarnings && !forceInstall) return
 
-    // Keep the modal open with a spinning confirm button while the request is in
-    // flight; close it once the install job is dispatched. Progress then streams
-    // via the InstallActivityFeed broadcast, so we drop the loading flag here.
     setLoading(true)
-    const result = await api.installService(service.service_name)
     setModal(null)
+    const result = await api.installService(service.service_name)
     setLoading(false)
     if (!result?.success) showError(result?.message || 'Failed to start installation.')
   }
 
   async function handleAffect(service: ServiceSlim, action: 'start' | 'stop' | 'restart') {
+    setModal(null)
     setLoading(true)
     const result = await api.affectService(service.service_name, action)
-    setModal(null)
-    if (!result?.success) {
-      setLoading(false)
-      showError(result?.message || `Failed to ${action} service.`)
-    } else {
-      // Keep loading=true so the overlay covers the page until it reloads.
-      setTimeout(() => window.location.reload(), 1500)
-    }
+    setLoading(false)
+    if (!result?.success) showError(result?.message || `Failed to ${action} service.`)
+    else setTimeout(() => window.location.reload(), 1500)
   }
 
   async function handleForceReinstall(service: ServiceSlim) {
+    setModal(null)
     setLoading(true)
     const result = await api.forceReinstallService(service.service_name)
-    setModal(null)
     setLoading(false)
     if (!result?.success) showError(result?.message || 'Failed to start reinstall.')
   }
 
   async function handleDelete(service: ServiceSlim) {
+    setModal(null)
     setLoading(true)
     const result = await api.deleteCustomApp(service.service_name, removeImage)
     setRemoveImage(false)
-    setModal(null)
-    if (!result?.success) {
-      setLoading(false)
-      showError(result?.message || 'Failed to delete app.')
-    } else {
-      setTimeout(() => window.location.reload(), 1000)
-    }
-  }
-
-  async function handleUninstall(service: ServiceSlim) {
-    setLoading(true)
-    const result = await api.uninstallService(service.service_name, removeImage)
-    setRemoveImage(false)
-    setModal(null)
-    if (!result?.success) {
-      setLoading(false)
-      showError(result?.message || 'Failed to uninstall app.')
-    } else {
-      setTimeout(() => window.location.reload(), 1000)
-    }
+    setLoading(false)
+    if (!result?.success) showError(result?.message || 'Failed to delete app.')
+    else setTimeout(() => window.location.reload(), 1000)
   }
 
   async function handleUpdate(service: ServiceSlim) {
@@ -272,51 +196,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
     setLoading(false)
     if (!result?.success) showError(result?.message || 'Failed to update app.')
     else setTimeout(() => window.location.reload(), 1500)
-  }
-
-  // Manual trigger for the catalog-wide update check. Results stream back over the
-  // SERVICE_UPDATES broadcast (handled by the effect above), which reloads the page.
-  async function handleCheckUpdates() {
-    if (!isOnline) {
-      showError('You must have an internet connection to check for updates.')
-      return
-    }
-    try {
-      setCheckingUpdates(true)
-      const response = await api.checkServiceUpdates()
-      if (!response?.success) throw new Error(response?.message || 'Failed to dispatch update check')
-    } catch (error: any) {
-      showError(`Failed to check for updates: ${error?.message || 'Unknown error'}`)
-      setCheckingUpdates(false)
-    }
-  }
-
-  // Versioned update for a curated (non-custom) catalog app. Progress + reload are handled
-  // by the installActivity effect (update-complete) above.
-  async function handleUpdateService(service: ServiceSlim, targetVersion: string) {
-    setLoading(true)
-    const result = await api.updateService(service.service_name, targetVersion)
-    setLoading(false)
-    if (!result?.success) showError(result?.message || 'Failed to update service.')
-  }
-
-  // Toggle per-app automatic updates (opt-in). Optimistically reflects the new
-  // state, reverting if the request fails. Gated by the global master switch in
-  // Settings → Updates; this only sets the per-app preference.
-  async function handleToggleAutoUpdate(service: ServiceSlim, enabled: boolean) {
-    setOpenDropdown(null)
-    setAutoUpdateOverrides((prev) => ({ ...prev, [service.service_name]: enabled }))
-    const result = await api.setServiceAutoUpdate(service.service_name, enabled)
-    if (!result?.success) {
-      setAutoUpdateOverrides((prev) => ({ ...prev, [service.service_name]: !enabled }))
-      showError(result?.message || 'Failed to update auto-update preference.')
-      return
-    }
-    const appName = service.friendly_name || service.service_name
-    addNotification({
-      message: `Auto-updates for ${appName} are ${enabled ? 'on' : 'off'}.`,
-      type: 'success',
-    })
   }
 
   function handleCustomAppCreated() {
@@ -341,17 +220,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
     setTimeout(() => window.location.reload(), 1500)
   }
 
-  function handleSetUrl(service: ServiceSlim) {
-    setOpenDropdown(null)
-    setUrlApp(service)
-  }
-
-  function handleUrlSaved() {
-    setUrlApp(null)
-    // Reload so the new link flows through to the card, /home, and settings.
-    window.location.reload()
-  }
-
   // ── Install modal helpers ─────────────────────────────────────────────────
   const hasPreflightWarnings =
     (preflight?.portConflicts.length ?? 0) > 0 || (preflight?.resourceWarnings.length ?? 0) > 0
@@ -360,19 +228,9 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
     <AppLayout>
       <Head title="Supply Depot" />
 
-      {loading && !modal && <LoadingSpinner fullscreen text="Working..." />}
+      {loading && <LoadingSpinner fullscreen text="Working..." />}
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {!isOnline && (
-          <Alert
-            title="No internet connection. You may not be able to download files."
-            message=""
-            type="warning"
-            variant="solid"
-            className="!mb-4"
-          />
-        )}
-
         {/* ── Hero / controls panel ─────────────────────────────────────────── */}
         <div className="rounded-lg overflow-hidden bg-desert-white border border-desert-stone-light shadow-sm mb-8">
           {/* Green header band */}
@@ -393,6 +251,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
             <div className="absolute top-0 right-0 w-24 h-24 transform translate-x-8 -translate-y-8">
               <div className="w-full h-full bg-desert-green-dark opacity-30 transform rotate-45" />
             </div>
+
             <div className="relative flex items-center gap-3">
               <IconBox className="text-white opacity-90 flex-shrink-0" size={28} />
               <div>
@@ -427,15 +286,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
                 />
               </div>
               <StyledButton
-                icon="IconRefreshAlert"
-                variant="outline"
-                onClick={handleCheckUpdates}
-                loading={checkingUpdates}
-                disabled={checkingUpdates || !isOnline}
-              >
-                Check for Updates
-              </StyledButton>
-              <StyledButton
                 icon="IconBrandDocker"
                 variant="outline"
                 onClick={() => setCustomAppOpen(true)}
@@ -450,10 +300,11 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
                 <button
                   key={cat.id}
                   onClick={() => setActiveCategory(cat.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border ${activeCategory === cat.id
-                    ? 'bg-desert-green text-white border-desert-green'
-                    : 'bg-surface-secondary text-text-muted border-desert-stone-lighter hover:text-text-primary hover:border-desert-stone-light'
-                    }`}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors cursor-pointer border ${
+                    activeCategory === cat.id
+                      ? 'bg-desert-green text-white border-desert-green'
+                      : 'bg-surface-secondary text-text-muted border-desert-stone-lighter hover:text-text-primary hover:border-desert-stone-light'
+                  }`}
                 >
                   {cat.label}
                 </button>
@@ -490,20 +341,10 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
                       onRestart={() => setModal({ type: 'restart', service })}
                       onReinstall={() => setModal({ type: 'reinstall', service })}
                       onDelete={() => setModal({ type: 'delete', service })}
-                      onUninstall={() => setModal({ type: 'uninstall', service })}
                       onLogs={() => setModal({ type: 'logs', service })}
                       onStats={() => setModal({ type: 'stats', service })}
                       onEdit={() => handleEdit(service)}
-                      onSetUrl={() => handleSetUrl(service)}
                       onUpdate={() => handleUpdate(service)}
-                      onUpdateVersion={() => setModal({ type: 'update', service })}
-                      autoUpdateEnabled={
-                        autoUpdateOverrides[service.service_name] ?? service.auto_update_enabled
-                      }
-                      autoUpdateMasterEnabled={appAutoUpdateMasterEnabled}
-                      onToggleAutoUpdate={(enabled) => handleToggleAutoUpdate(service, enabled)}
-                      migrationInstructionsHref={(service.service_name.startsWith(SERVICE_NAMES.KOLIBRI) && educationGen2Installed) ? getSupplyDepotDocLink(SERVICE_NAMES.KOLIBRI) || undefined : undefined}
-                      migrationInstructionsText={(service.service_name === SERVICE_NAMES.KOLIBRI) ? 'How to migrate content to Gen 2' : "How to migrate content from Gen 1"}
                     />
                   ))}
                 </div>
@@ -527,13 +368,10 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
                       onRestart={() => setModal({ type: 'restart', service })}
                       onReinstall={() => setModal({ type: 'reinstall', service })}
                       onDelete={() => setModal({ type: 'delete', service })}
-                      onUninstall={() => setModal({ type: 'uninstall', service })}
                       onLogs={() => setModal({ type: 'logs', service })}
                       onStats={() => setModal({ type: 'stats', service })}
                       onEdit={() => handleEdit(service)}
-                      onSetUrl={() => handleSetUrl(service)}
                       onUpdate={() => handleUpdate(service)}
-                      onUpdateVersion={() => setModal({ type: 'update', service })}
                     />
                   ))}
                 </div>
@@ -550,10 +388,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         <StyledModal
           title={`Install ${modal.service.friendly_name ?? modal.service.service_name}`}
           open
-          onCancel={() => {
-            if (loading) return
-            setModal(null)
-          }}
+          onCancel={() => setModal(null)}
           onConfirm={() => handleInstall(modal.service)}
           confirmText="Install"
           confirmIcon="IconDownload"
@@ -611,10 +446,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         <StyledModal
           title={`Start ${modal.service.friendly_name ?? modal.service.service_name}`}
           open
-          onCancel={() => {
-            if (loading) return
-            setModal(null)
-          }}
+          onCancel={() => setModal(null)}
           onConfirm={() => handleAffect(modal.service, 'start')}
           confirmText="Start"
           confirmIcon="IconPlayerPlay"
@@ -630,10 +462,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         <StyledModal
           title={`Stop ${modal.service.friendly_name ?? modal.service.service_name}`}
           open
-          onCancel={() => {
-            if (loading) return
-            setModal(null)
-          }}
+          onCancel={() => setModal(null)}
           onConfirm={() => handleAffect(modal.service, 'stop')}
           confirmText="Stop"
           confirmIcon="IconPlayerStop"
@@ -649,10 +478,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         <StyledModal
           title={`Restart ${modal.service.friendly_name ?? modal.service.service_name}`}
           open
-          onCancel={() => {
-            if (loading) return
-            setModal(null)
-          }}
+          onCancel={() => setModal(null)}
           onConfirm={() => handleAffect(modal.service, 'restart')}
           confirmText="Restart"
           confirmIcon="IconRefresh"
@@ -668,10 +494,7 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         <StyledModal
           title={`Force Reinstall ${modal.service.friendly_name ?? modal.service.service_name}`}
           open
-          onCancel={() => {
-            if (loading) return
-            setModal(null)
-          }}
+          onCancel={() => setModal(null)}
           onConfirm={() => handleForceReinstall(modal.service)}
           confirmText="Wipe & Reinstall"
           confirmIcon="IconRefresh"
@@ -692,7 +515,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
           title={`Delete ${modal.service.friendly_name ?? modal.service.service_name}`}
           open
           onCancel={() => {
-            if (loading) return
             setRemoveImage(false)
             setModal(null)
           }}
@@ -706,39 +528,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
           <div className="space-y-3 text-sm text-text-muted">
             <p className="font-semibold text-desert-red">This will permanently remove this custom app.</p>
             <p>The container will be stopped and removed. Host volume data will remain on disk.</p>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={removeImage}
-                onChange={(e) => setRemoveImage(e.target.checked)}
-                className="accent-desert-red h-4 w-4 rounded"
-              />
-              <span className="text-text-muted text-xs">Also remove the Docker image to reclaim disk space</span>
-            </label>
-          </div>
-        </StyledModal>
-      )}
-
-      {/* Uninstall curated app modal */}
-      {modal?.type === 'uninstall' && (
-        <StyledModal
-          title={`Uninstall ${modal.service.friendly_name ?? modal.service.service_name}`}
-          open
-          onCancel={() => {
-            if (loading) return
-            setRemoveImage(false)
-            setModal(null)
-          }}
-          onConfirm={() => handleUninstall(modal.service)}
-          confirmText="Uninstall"
-          confirmIcon="IconTrash"
-          confirmVariant="danger"
-          confirmLoading={loading}
-          icon={<IconAlertTriangle className="text-desert-red" size={40} />}
-        >
-          <div className="space-y-3 text-sm text-text-muted">
-            <p className="font-semibold text-desert-red">This will remove the app from this device.</p>
-            <p>The container will be stopped and removed, and the app returns to the catalog below. App data under the storage folder stays on disk, so reinstalling brings it back as it was.</p>
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -772,25 +561,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         />
       )}
 
-      {/* Versioned update modal (curated apps with an available update) */}
-      {modal?.type === 'update' && (
-        <UpdateServiceModal
-          record={modal.service}
-          currentTag={extractTag(modal.service.container_image)}
-          latestVersion={modal.service.available_update_version!}
-          onCancel={() => {
-            if (loading) return
-            setModal(null)
-          }}
-          onUpdate={(targetVersion) => {
-            const service = modal.service
-            setModal(null)
-            handleUpdateService(service, targetVersion)
-          }}
-          showError={showError}
-        />
-      )}
-
       {/* Custom app creation modal */}
       <CustomAppModal
         open={customAppOpen}
@@ -806,15 +576,6 @@ export default function SupplyDepotPage(props: { system: { services: ServiceSlim
         initial={editApp}
         onClose={() => setEditApp(null)}
         onCreated={handleEdited}
-        showError={showError}
-      />
-
-      {/* Custom launch URL modal */}
-      <AppUrlModal
-        open={!!urlApp}
-        service={urlApp}
-        onClose={() => setUrlApp(null)}
-        onSaved={handleUrlSaved}
         showError={showError}
       />
     </AppLayout>
@@ -834,20 +595,10 @@ interface AppCardProps {
   onRestart: () => void
   onReinstall: () => void
   onDelete: () => void
-  onUninstall: () => void
   onLogs: () => void
   onStats: () => void
   onEdit: () => void
-  onSetUrl: () => void
   onUpdate: () => void
-  onUpdateVersion: () => void
-  // Installed-only: per-app auto-update preference + toggle handler.
-  autoUpdateEnabled?: boolean
-  // Global master switch (Settings → Updates). When off, per-app toggles are inert.
-  autoUpdateMasterEnabled?: boolean
-  onToggleAutoUpdate?: (enabled: boolean) => void
-  migrationInstructionsHref?: string
-  migrationInstructionsText?: string
 }
 
 function AppCard({
@@ -861,44 +612,15 @@ function AppCard({
   onRestart,
   onReinstall,
   onDelete,
-  onUninstall,
   onLogs,
   onStats,
   onEdit,
-  onSetUrl,
   onUpdate,
-  onUpdateVersion,
-  autoUpdateEnabled,
-  autoUpdateMasterEnabled,
-  onToggleAutoUpdate,
-  migrationInstructionsHref,
-  migrationInstructionsText,
 }: AppCardProps) {
   const isRunning = service.status === 'running'
   const isStopped = service.installed && !isRunning
   const catColor = service.category ? CATEGORY_COLORS[service.category] ?? CATEGORY_COLORS.custom : CATEGORY_COLORS.custom
   const isDropdownOpen = openDropdown === service.service_name
-  // Port pill: an ui_location may carry an explicit scheme ("https:8480") — show just the port,
-  // with a lock when it's served over HTTPS, rather than the raw "https:8480" string.
-  const uiIsPath = !!service.ui_location && service.ui_location.startsWith('/')
-  const uiIsHttps = /^https:/.test(service.ui_location || '')
-  const uiPort = service.ui_location && !uiIsPath ? service.ui_location.replace(/^https?:/, '') : null
-  // Per-app documentation link (in-app docs page, anchored to this app's section). Null for apps
-  // without a doc section (custom apps, undocumented catalog apps) so the Docs item is hidden.
-  const docLink = getSupplyDepotDocLink(service.service_name)
-
-  // Subtitle under the app name: the powered-by name plus the installed image tag
-  // (e.g. "Kiwix · 3.7.0"). Only installed apps have a meaningful running version; a
-  // not-yet-installed catalog entry shows just the powered-by name. Null when neither exists.
-  const version = service.installed ? extractTag(service.container_image) : ''
-  const subtitle =
-    !service.powered_by && !version ? null : (
-      <p className="text-xs text-text-muted truncate">
-        {service.powered_by}
-        {service.powered_by && version ? ' · ' : ''}
-        {version ? <span className="font-mono">{version}</span> : null}
-      </p>
-    )
 
   function toggleDropdown(e: React.MouseEvent) {
     e.stopPropagation()
@@ -907,15 +629,15 @@ function AppCard({
 
   return (
     <div
-      className={`relative flex flex-col rounded-xl border p-4 bg-surface-primary shadow-sm transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 ${service.installed
-        ? 'border-desert-stone-light'
-        : 'border-desert-stone-lighter hover:border-desert-stone-light'
-        }`}
+      className={`relative flex flex-col rounded-xl border p-4 bg-surface-primary shadow-sm transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 overflow-hidden ${
+        service.installed
+          ? 'border-desert-stone-light'
+          : 'border-desert-stone-lighter hover:border-desert-stone-light'
+      }`}
     >
-      {/* Installed accent spine (rounded to follow the card corners — the card no longer clips
-          overflow so the Manage dropdown can open above the card without being cut off) */}
+      {/* Installed accent spine */}
       {service.installed ? (
-        <div className="absolute left-0 top-0 bottom-0 w-1 bg-desert-green rounded-l-xl" />
+        <div className="absolute left-0 top-0 bottom-0 w-1 bg-desert-green" />
       ) : null}
 
       {/* Top row: icon + status badge */}
@@ -932,7 +654,9 @@ function AppCard({
             <p className="font-semibold text-text-primary text-sm leading-tight truncate">
               {service.friendly_name ?? service.service_name}
             </p>
-            {subtitle}
+            {service.powered_by && (
+              <p className="text-xs text-text-muted truncate">{service.powered_by}</p>
+            )}
           </div>
         </div>
 
@@ -976,37 +700,10 @@ function AppCard({
             custom
           </span>
         ) : null}
-        {service.is_user_modified && !service.is_custom ? (
-          <span
-            className="text-xs px-2 py-0.5 rounded-full font-medium bg-desert-tan-lighter text-desert-tan-dark border border-desert-tan-light"
-            title="You've customized this app, so it won't be overwritten by catalog updates."
-          >
-            modified
-          </span>
-        ) : null}
-        {service.is_deprecated ? (
-          <span
-            className="text-xs px-2 py-0.5 rounded-full font-medium bg-desert-orange-lighter text-desert-orange-dark border border-desert-orange-light"
-            title="This is a legacy version that's no longer maintained. Install the current Education Platform from the catalog, then uninstall this one."
-          >
-            legacy
-          </span>
-        ) : null}
-        {uiPort && (
+        {service.ui_location && !service.ui_location.startsWith('/') && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-surface-secondary text-text-muted font-mono">
-            {uiIsHttps ? '🔒 ' : ''}:{uiPort}
+            :{service.ui_location}
           </span>
-        )}
-        {service.available_update_version && !service.is_custom && (
-          <button
-            type="button"
-            onClick={onUpdateVersion}
-            title={`Update to ${service.available_update_version}`}
-            className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-desert-orange text-white shadow-sm cursor-pointer transition-colors hover:bg-desert-orange-dark"
-          >
-            <IconArrowUp className="h-3 w-3" />
-            Update available
-          </button>
         )}
       </div>
 
@@ -1026,10 +723,10 @@ function AppCard({
 
         {service.installed ? (
           <>
-            {/* Open button — shown when the app has a default location or a user-set custom URL */}
-            {(service.ui_location || service.custom_url) && (
+            {/* Open button */}
+            {service.ui_location && (
               <a
-                href={getServiceLink(service.ui_location || "", service.custom_url)}
+                href={getServiceLink(service.ui_location)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1"
@@ -1048,18 +745,6 @@ function AppCard({
 
               {isDropdownOpen && (
                 <div className="absolute right-0 bottom-full mb-1 w-44 bg-surface-primary border border-surface-secondary rounded-lg shadow-xl z-20 overflow-hidden">
-                  {docLink && (
-                    <a
-                      href={docLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex items-center gap-2 w-full px-3 py-2 text-xs transition-colors text-left cursor-pointer text-text-primary hover:bg-surface-secondary"
-                    >
-                      <IconBook className="h-4 w-4" />
-                      Docs
-                    </a>
-                  )}
                   {isStopped && (
                     <DropdownItem icon={<IconPlayerPlay className="h-4 w-4" />} label="Start" onClick={onStart} />
                   )}
@@ -1069,47 +754,8 @@ function AppCard({
                   <DropdownItem icon={<IconRefresh className="h-4 w-4" />} label="Restart" onClick={onRestart} />
                   <DropdownItem icon={<IconFileText className="h-4 w-4" />} label="Logs" onClick={onLogs} />
                   <DropdownItem icon={<IconChartBar className="h-4 w-4" />} label="Stats" onClick={onStats} />
-                  <DropdownItem icon={<IconPencil className="h-4 w-4" />} label="Edit" onClick={onEdit} />
-                  <DropdownItem icon={<IconWorld className="h-4 w-4" />} label="Set custom URL" onClick={onSetUrl} />
-                  {
-                    migrationInstructionsHref ? (
-                      <a
-                        href={migrationInstructionsHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex items-center gap-2 w-full px-3 py-2 text-xs transition-colors text-left cursor-pointer text-text-primary hover:bg-surface-secondary"
-                      >
-                        <IconBook className="h-4 w-4" />
-                        {migrationInstructionsText || 'Migration instructions'}
-                      </a>
-                    ) : (null)
-                  }
-                  {!service.is_custom && onToggleAutoUpdate ? (
-                    autoUpdateMasterEnabled ? (
-                      <DropdownItem
-                        icon={
-                          <IconClockBolt
-                            className={`h-4 w-4 ${autoUpdateEnabled ? 'text-desert-green' : ''}`}
-                          />
-                        }
-                        label={`Auto-update: ${autoUpdateEnabled ? 'On' : 'Off'}`}
-                        onClick={() => onToggleAutoUpdate(!autoUpdateEnabled)}
-                      />
-                    ) : (
-                      <DropdownItem
-                        icon={<IconClockBolt className="h-4 w-4" />}
-                        label="App auto-updates off — open Settings"
-                        onClick={() => router.visit('/settings/update')}
-                      />
-                    )
-                  ) : null}
-                  {service.available_update_version && !service.is_custom ? (
-                    <DropdownItem
-                      icon={<IconArrowUp className="h-4 w-4 text-desert-green" />}
-                      label={`Update to ${service.available_update_version}`}
-                      onClick={onUpdateVersion}
-                    />
+                  {service.is_custom ? (
+                    <DropdownItem icon={<IconPencil className="h-4 w-4" />} label="Edit" onClick={onEdit} />
                   ) : null}
                   {service.is_custom ? (
                     <DropdownItem icon={<IconCloudDownload className="h-4 w-4" />} label="Update (pull latest)" onClick={onUpdate} />
@@ -1117,9 +763,7 @@ function AppCard({
                   <DropdownItem icon={<IconRefresh className="h-4 w-4 text-desert-orange" />} label="Force Reinstall" onClick={onReinstall} danger />
                   {service.is_custom ? (
                     <DropdownItem icon={<IconTrash className="h-4 w-4 text-desert-red" />} label="Delete" onClick={onDelete} danger />
-                  ) : (
-                    <DropdownItem icon={<IconTrash className="h-4 w-4 text-desert-red" />} label="Uninstall" onClick={onUninstall} danger />
-                  )}
+                  ): null}
                 </div>
               )}
             </div>
@@ -1155,10 +799,11 @@ function DropdownItem({
         e.stopPropagation()
         onClick()
       }}
-      className={`flex items-center gap-2 w-full px-3 py-2 text-xs transition-colors text-left cursor-pointer ${danger
-        ? 'text-desert-red hover:bg-desert-red/10'
-        : 'text-text-primary hover:bg-surface-secondary'
-        }`}
+      className={`flex items-center gap-2 w-full px-3 py-2 text-xs transition-colors text-left cursor-pointer ${
+        danger
+          ? 'text-desert-red hover:bg-desert-red/10'
+          : 'text-text-primary hover:bg-surface-secondary'
+      }`}
     >
       {icon}
       {label}

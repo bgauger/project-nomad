@@ -337,10 +337,7 @@ export class SystemService {
         'display_order',
         'container_image',
         'available_update_version',
-        'auto_update_enabled',
         'is_custom',
-        'is_user_modified',
-        'is_deprecated',
         'category'
       )
       .where('is_dependency_service', false)
@@ -377,10 +374,7 @@ export class SystemService {
         display_order: service.display_order,
         container_image: service.container_image,
         available_update_version: service.available_update_version,
-        auto_update_enabled: service.auto_update_enabled,
         is_custom: service.is_custom,
-        is_user_modified: service.is_user_modified,
-        is_deprecated: service.is_deprecated,
         category: service.category,
       })
     }

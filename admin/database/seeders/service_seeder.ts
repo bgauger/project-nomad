@@ -7,19 +7,7 @@ import { KIWIX_LIBRARY_CMD } from '../../constants/kiwix.js'
 
 type ServiceSeedRecord = Omit<
   ModelAttributes<Service>,
-  | 'created_at'
-  | 'updated_at'
-  | 'id'
-  | 'available_update_version'
-  | 'update_checked_at'
-  | 'metadata'
-  | 'is_user_modified'
-  | 'is_deprecated'
-  | 'custom_url'
-  | 'auto_update_enabled'
-  | 'available_update_first_seen_at'
-  | 'auto_update_consecutive_failures'
-  | 'auto_update_disabled_reason'
+  'created_at' | 'updated_at' | 'id' | 'available_update_version' | 'update_checked_at' | 'metadata'
 > & { metadata?: string | null }
 
 export default class ServiceSeeder extends BaseSeeder {
@@ -213,7 +201,7 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 20,
       description: 'Locally-hosted PDF manipulation tool — merge, split, compress, convert, and more',
       icon: 'IconFileDescription',
-      container_image: 'ghcr.io/stirling-tools/s-pdf:2.13.1',
+      container_image: 'ghcr.io/stirling-tools/s-pdf:latest',
       source_repo: 'https://github.com/Stirling-Tools/Stirling-PDF',
       container_command: null,
       container_config: JSON.stringify({
@@ -226,11 +214,7 @@ export default class ServiceSeeder extends BaseSeeder {
           ],
         },
         ExposedPorts: { '8080/tcp': {} },
-        // Stirling v2 ignores the old v1 `DOCKER_ENABLE_SECURITY` flag and ships with
-        // `security.enableLogin: true` in settings.yml, so it boots behind a login wall.
-        // For a single-user offline appliance we open it straight to the tools. Users who
-        // want a login can flip this to `true` via Manage > Edit (env overrides settings.yml).
-        Env: ['SECURITY_ENABLELOGIN=false', 'LANGS=en_GB'],
+        Env: ['DOCKER_ENABLE_SECURITY=false', 'LANGS=en_GB'],
       }),
       ui_location: '8400',
       installed: false,
@@ -249,44 +233,17 @@ export default class ServiceSeeder extends BaseSeeder {
       icon: 'IconFolderOpen',
       container_image: 'filebrowser/filebrowser:v2',
       source_repo: 'https://github.com/filebrowser/filebrowser',
-      // Browsable root is storage/filebrowser/files (persistent, so files created at the top level
-      // survive updates), with the user-facing content folders mounted in beneath it. We deliberately
-      // do NOT mount the sensitive/app-internal folders (vaultwarden, ollama, qdrant, logs, other
-      // apps' config + *.db). They simply aren't present in the container, so they can't be browsed,
-      // downloaded, or deleted — this is the guardrail. FileBrowser's own rules feature would need a
-      // wrapper script / imported config shipped into the container, which the catalog model doesn't
-      // support, so mount selection is how we scope visibility. To expose another content folder,
-      // add a `${STORAGE}/<folder>:/srv/<folder>` bind here.
-      // The DB lives in storage/filebrowser/db (mounted at /db, a SIBLING of the root, not under it)
-      // so FileBrowser's own .filebrowser.db never shows up in the user's file listing. User: root so
-      // it can read/write folders owned by other UIDs.
-      container_command: '--root /srv --database /db/.filebrowser.db',
+      // Stores the database alongside the files it serves so a single volume covers everything.
+      // User: root — host directories auto-created by Docker are owned root:root 755; FileBrowser's
+      // image runs as UID 1000 by default which can't write to them (DooD: we can't chown on host).
+      container_command: '--root /srv --database /srv/.filebrowser.db',
       container_config: JSON.stringify({
         HostConfig: {
           RestartPolicy: { Name: 'unless-stopped' },
           PortBindings: { '80/tcp': [{ HostPort: '8410' }] },
-          Binds: [
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/filebrowser/files:/srv`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/filebrowser/db:/db`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/books:/srv/books`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/maps:/srv/maps`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/media:/srv/media`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/kb_uploads:/srv/kb_uploads`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/zim:/srv/zim`,
-          ],
+          Binds: [`${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/filebrowser:/srv`],
         },
         ExposedPorts: { '80/tcp': {} },
-        // Without an initial password FileBrowser generates a random one and prints it only to
-        // the container logs, which a non-technical user can't reach. Seed a known admin/nomad
-        // login on first run instead (only applies when the DB doesn't exist yet); the docs tell
-        // users to change it. FB_NOAUTH / --noauth don't work on this image (v2.63.x), so a login
-        // stays, which is the safer default anyway for a read/write/delete file manager.
-        // NOTE: FB_PASSWORD must be a bcrypt hash, not plaintext. The value below is the hash of
-        // "nomad" (generated via `filebrowser hash nomad`). Login is admin / nomad.
-        Env: [
-          'FB_USERNAME=admin',
-          'FB_PASSWORD=$2a$10$Dvu3XTiLxvPTzvdOKu6y6.AmadN6Zt0ddLwK.8MQ.RCIQWunWBQXa',
-        ],
         User: 'root'
       }),
       ui_location: '8410',
@@ -304,7 +261,7 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 22,
       description: 'Web-based e-book reader and library manager for your Calibre collection',
       icon: 'IconBook',
-      container_image: 'linuxserver/calibre-web:0.6.26-ls386',
+      container_image: 'lscr.io/linuxserver/calibre-web:latest',
       source_repo: 'https://github.com/janeczku/calibre-web',
       container_command: null,
       container_config: JSON.stringify({
@@ -335,7 +292,7 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 23,
       description: 'Collection of handy utilities for developers — UUID, hash, encoding, formatters, and more',
       icon: 'IconTool',
-      container_image: 'ghcr.io/corentinth/it-tools:2024.10.22-7ca5933',
+      container_image: 'ghcr.io/corentinth/it-tools:latest',
       source_repo: 'https://github.com/CorentinTh/it-tools',
       container_command: null,
       container_config: JSON.stringify({
@@ -360,7 +317,7 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 24,
       description: 'Virtual whiteboard for sketching hand-drawn-style diagrams — works fully offline',
       icon: 'IconPencil',
-      container_image: 'excalidraw/excalidraw:sha-4bfc5bb',
+      container_image: 'excalidraw/excalidraw:latest',
       source_repo: 'https://github.com/excalidraw/excalidraw',
       container_command: null,
       container_config: JSON.stringify({
@@ -385,16 +342,15 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 30,
       description: 'Browser-based client for managing Meshtastic mesh radio devices',
       icon: 'IconWifi',
-      container_image: 'ghcr.io/meshtastic/web:2.7.1',
+      container_image: 'ghcr.io/meshtastic/web:latest',
       source_repo: 'https://github.com/meshtastic/web',
       container_command: null,
       container_config: JSON.stringify({
         HostConfig: {
           RestartPolicy: { Name: 'unless-stopped' },
-          // meshtastic/web serves on 8080 inside the container, not 80.
-          PortBindings: { '8080/tcp': [{ HostPort: '8450' }] },
+          PortBindings: { '80/tcp': [{ HostPort: '8450' }] },
         },
-        ExposedPorts: { '8080/tcp': {} },
+        ExposedPorts: { '80/tcp': {} },
       }),
       ui_location: '8450',
       installed: false,
@@ -405,35 +361,24 @@ export default class ServiceSeeder extends BaseSeeder {
       depends_on: null,
     },
     {
-      service_name: SERVICE_NAMES.MESHCORE_WEB,
-      friendly_name: 'MeshCore Web',
-      powered_by: 'MeshCore',
-      display_order: 32,
-      description: 'Browser-based client for MeshCore mesh radio devices',
-      icon: 'IconAntenna',
-      // aXistem's prebuilt image of Liam Cottle's MeshCore web client (MeshCore is a sibling LoRa
-      // mesh project to Meshtastic).
-      container_image: 'ghcr.io/axistem-dev/meshcore-web:v1.45.0',
-      source_repo: 'https://github.com/aXistem-dev/meshcore-web',
+      service_name: SERVICE_NAMES.MESHTASTICD,
+      friendly_name: 'Meshtastic Daemon',
+      powered_by: 'Meshtastic',
+      display_order: 31,
+      description: 'Software-defined Meshtastic node with REST API — connect devices and build mesh networks',
+      icon: 'IconBroadcast',
+      container_image: 'meshtastic/meshtasticd:latest',
+      source_repo: 'https://github.com/meshtastic/meshtasticd',
       container_command: null,
       container_config: JSON.stringify({
         HostConfig: {
           RestartPolicy: { Name: 'unless-stopped' },
-          // The image is stock nginx:alpine serving the Flutter build over HTTP on 80. MeshCore's
-          // client reaches a radio via Web Bluetooth / Web Serial, which browsers only permit from a
-          // secure (HTTPS) context — so we serve it over HTTPS. _runPreinstallActions__MeshCoreWeb
-          // writes a self-signed cert + an SSL server config into storage/meshcore-web; we bind both
-          // in (the config over the image's default.conf) and publish 443. The https: prefix on
-          // ui_location builds an https:// Open link (one-time cert warning, same as Vaultwarden).
-          PortBindings: { '443/tcp': [{ HostPort: '8500' }] },
-          Binds: [
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/meshcore-web/nginx-ssl.conf:/etc/nginx/conf.d/default.conf:ro`,
-            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/meshcore-web/certs:/certs:ro`,
-          ],
+          PortBindings: { '4403/tcp': [{ HostPort: '8460' }] },
+          Binds: [`${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/meshtasticd:/root/.portduino`],
         },
-        ExposedPorts: { '443/tcp': {} },
+        ExposedPorts: { '4403/tcp': {} },
       }),
-      ui_location: 'https:8500',
+      ui_location: '8460',
       installed: false,
       installation_status: 'idle',
       is_dependency_service: false,
@@ -448,11 +393,8 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 25,
       description: 'Home inventory and asset management — track everything you own',
       icon: 'IconBox',
-      // Maintained fork. The original hay-kot/homebox was archived June 2024;
-      // sysadminsmedia is the official continuation (drop-in: same 7745 port + /data volume,
-      // migrates an existing DB forward, telemetry off by default).
-      container_image: 'ghcr.io/sysadminsmedia/homebox:0.26.2',
-      source_repo: 'https://github.com/sysadminsmedia/homebox',
+      container_image: 'ghcr.io/hay-kot/homebox:latest',
+      source_repo: 'https://github.com/hay-kot/homebox',
       container_command: null,
       container_config: JSON.stringify({
         HostConfig: {
@@ -477,7 +419,7 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 26,
       description: 'Lightweight Bitwarden-compatible password manager server — secure your credentials offline',
       icon: 'IconShieldLock',
-      container_image: 'vaultwarden/server:1.36.0',
+      container_image: 'vaultwarden/server:latest',
       source_repo: 'https://github.com/dani-garcia/vaultwarden',
       container_command: null,
       container_config: JSON.stringify({
@@ -487,16 +429,9 @@ export default class ServiceSeeder extends BaseSeeder {
           Binds: [`${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/vaultwarden:/data`],
         },
         ExposedPorts: { '80/tcp': {} },
-        // ROCKET_TLS points at the self-signed cert generated on install by
-        // DockerService._runPreinstallActions__Vaultwarden. Vaultwarden's web vault needs a secure
-        // context (HTTPS) or it refuses to register/unlock, so it ships HTTPS-on-by-default.
-        Env: [
-          'WEBSOCKET_ENABLED=true',
-          'ROCKET_TLS={certs="/data/cert.pem",key="/data/key.pem"}',
-        ],
+        Env: ['WEBSOCKET_ENABLED=true'],
       }),
-      // https: prefix tells getServiceLink to build an https:// Open link on this port.
-      ui_location: 'https:8480',
+      ui_location: '8480',
       installed: false,
       installation_status: 'idle',
       is_dependency_service: false,
@@ -512,7 +447,7 @@ export default class ServiceSeeder extends BaseSeeder {
       display_order: 27,
       description: 'Open-source media server — stream your video, music, and photo libraries',
       icon: 'IconMovie',
-      container_image: 'jellyfin/jellyfin:10.11.11',
+      container_image: 'jellyfin/jellyfin:latest',
       source_repo: 'https://github.com/jellyfin/jellyfin',
       container_command: null,
       container_config: JSON.stringify({
@@ -539,11 +474,7 @@ export default class ServiceSeeder extends BaseSeeder {
   ]
 
   async run() {
-    const existingServices = await Service.query().select([
-      'service_name',
-      'is_custom',
-      'is_user_modified',
-    ])
+    const existingServices = await Service.query().select(['service_name', 'is_custom'])
     const existingServiceMap = new Map(existingServices.map((s) => [s.service_name, s]))
 
     const newServices = ServiceSeeder.DEFAULT_SERVICES.filter(
@@ -554,20 +485,16 @@ export default class ServiceSeeder extends BaseSeeder {
       await Service.createMany([...newServices])
     }
 
-    // Keep curated services in sync with the catalog. Custom services are user-defined and must
-    // never be overwritten. User-modified curated services (a user edited their config) are
-    // likewise left alone so the edit survives reboots. ui_location is synced too so a catalog
-    // change to an app's link/scheme/port (e.g. Vaultwarden moving to https:8480, or a corrected
-    // internal port) reaches existing non-modified installs on update, not just fresh ones.
+    // Keep container_config, container_command, and metadata in sync for curated services.
+    // Custom services are user-defined and must never be overwritten.
     for (const service of ServiceSeeder.DEFAULT_SERVICES) {
       const existing = existingServiceMap.get(service.service_name)
-      if (existing && !existing.is_custom && !existing.is_user_modified) {
+      if (existing && !existing.is_custom) {
         await Service.query().where('service_name', service.service_name).update({
           container_config: service.container_config,
           container_command: service.container_command ?? null,
           metadata: (service as any).metadata ?? null,
           category: service.category,
-          ui_location: service.ui_location,
         })
       }
     }

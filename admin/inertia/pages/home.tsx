@@ -68,7 +68,7 @@ const SYSTEM_ITEMS = [
     to: '/supply-depot',
     target: '',
     description: 'Browse and install curated apps, or add your own Docker container',
-    icon: <IconBox size={48} />,
+    icon: <IconPlus size={48} />,
     installed: true,
     displayOrder: 51,
     poweredBy: null,

@@ -546,177 +546,33 @@ router
 
 router
   .group(() => {
-    documented(router.get('/debug-info', [SystemController, 'getDebugInfo']), {
-      summary: 'Get system debug information',
-      tags: ['system'],
-    })
-    documented(router.get('/info', [SystemController, 'getSystemInfo']), {
-      summary: 'Get system information',
-      tags: ['system'],
-    })
-    documented(router.get('/internet-status', [SystemController, 'getInternetStatus']), {
-      summary: 'Get internet connectivity status',
-      tags: ['system'],
-    })
-    documented(router.get('/services', [SystemController, 'getServices']), {
-      summary: 'List services',
-      tags: ['system'],
-    })
-    documented(router.post('/services/affect', [SystemController, 'affectService']), {
-      summary: 'Start, stop, or restart a service',
-      tags: ['system'],
-      request: affectServiceValidator,
-    })
-    documented(router.post('/services/install', [SystemController, 'installService']), {
-      summary: 'Install a service',
-      tags: ['system'],
-      request: installServiceValidator,
-    })
-    documented(
-      router.post('/services/force-reinstall', [SystemController, 'forceReinstallService']),
-      {
-        summary: 'Force reinstall a service',
-        tags: ['system'],
-        request: installServiceValidator,
-      }
-    )
-    documented(router.post('/services/uninstall', [SystemController, 'uninstallService']), {
-      summary: 'Uninstall a service',
-      tags: ['system'],
-      request: uninstallServiceValidator,
-    })
-    documented(router.post('/services/check-updates', [SystemController, 'checkServiceUpdates']), {
-      summary: 'Check for service updates',
-      tags: ['system'],
-    })
-    documented(router.get('/services/preflight', [SystemController, 'preflightCheck']), {
-      summary: 'Preflight a service install',
-      tags: ['system'],
-      query: preflightValidator,
-    })
-    documented(router.get('/services/suggest-port', [SystemController, 'suggestCustomPort']), {
-      summary: 'Suggest an available custom port',
-      tags: ['system'],
-    })
-    documented(
-      router.post('/services/preflight-custom', [SystemController, 'preflightCustomApp']),
-      {
-        summary: 'Preflight a custom app install',
-        tags: ['system'],
-        request: preflightCustomValidator,
-      }
-    )
-    documented(router.post('/services/custom', [SystemController, 'createCustomApp']), {
-      summary: 'Create a custom app',
-      tags: ['system'],
-      request: customAppValidator,
-    })
-    documented(router.put('/services/custom', [SystemController, 'updateCustomApp']), {
-      summary: 'Update a custom app',
-      tags: ['system'],
-      request: updateCustomAppValidator,
-    })
-    documented(
-      router.post('/services/custom/update', [SystemController, 'updateCustomApp_pullLatest']),
-      {
-        summary: 'Pull the latest version of a custom app',
-        tags: ['system'],
-        request: installServiceValidator,
-      }
-    )
-    documented(router.delete('/services/custom', [SystemController, 'deleteCustomApp']), {
-      summary: 'Delete a custom app',
-      tags: ['system'],
-      request: deleteCustomAppValidator,
-    })
-    documented(router.get('/services/custom/:name', [SystemController, 'getCustomApp']), {
-      summary: 'Get a custom app',
-      tags: ['system'],
-    })
-    documented(router.put('/services/custom-url', [SystemController, 'setServiceCustomUrl']), {
-      summary: 'Set a service custom URL',
-      tags: ['system'],
-      request: setServiceCustomUrlValidator,
-    })
-    documented(router.get('/services/:name/logs', [SystemController, 'getServiceLogs']), {
-      summary: 'Get service logs',
-      tags: ['system'],
-      query: serviceLogsValidator,
-    })
-    documented(router.get('/services/:name/stats', [SystemController, 'getServiceStats']), {
-      summary: 'Get service stats',
-      tags: ['system'],
-    })
-    documented(
-      router.get('/services/:name/available-versions', [SystemController, 'getAvailableVersions']),
-      {
-        summary: 'List available service versions',
-        tags: ['system'],
-      }
-    )
-    documented(router.post('/services/update', [SystemController, 'updateService']), {
-      summary: 'Update a service',
-      tags: ['system'],
-      request: updateServiceValidator,
-    })
-    documented(router.post('/services/auto-update', [SystemController, 'setServiceAutoUpdate']), {
-      summary: 'Set service auto-update',
-      tags: ['system'],
-      request: setServiceAutoUpdateValidator,
-    })
-    documented(
-      router.get('/apps/auto-update/status', [SystemController, 'getAppAutoUpdateStatus']),
-      {
-        summary: 'Get app auto-update status',
-        tags: ['system'],
-      }
-    )
-    documented(
-      router.get('/content/auto-update/status', [SystemController, 'getContentAutoUpdateStatus']),
-      {
-        summary: 'Get content auto-update status',
-        tags: ['system'],
-      }
-    )
-    documented(
-      router.post('/subscribe-release-notes', [SystemController, 'subscribeToReleaseNotes']),
-      {
-        summary: 'Subscribe to release notes',
-        tags: ['system'],
-        request: subscribeToReleaseNotesValidator,
-      }
-    )
-    documented(router.get('/latest-version', [SystemController, 'checkLatestVersion']), {
-      summary: 'Check the latest available version',
-      tags: ['system'],
-      query: checkLatestVersionValidator,
-    })
-    documented(router.post('/update', [SystemController, 'requestSystemUpdate']), {
-      summary: 'Request a system update',
-      tags: ['system'],
-    })
-    documented(router.get('/update/status', [SystemController, 'getSystemUpdateStatus']), {
-      summary: 'Get system update status',
-      tags: ['system'],
-    })
-    documented(router.get('/update/logs', [SystemController, 'getSystemUpdateLogs']), {
-      summary: 'Get system update logs',
-      tags: ['system'],
-    })
-    documented(router.get('/auto-update/status', [SystemController, 'getAutoUpdateStatus']), {
-      summary: 'Get system auto-update status',
-      tags: ['system'],
-    })
-    documented(router.get('/settings', [SettingsController, 'getSetting']), {
-      summary: 'Get a system setting',
-      tags: ['system'],
-      query: getSettingSchema,
-    })
-    documented(router.patch('/settings', [SettingsController, 'updateSetting']), {
-      summary: 'Update a system setting',
-      tags: ['system'],
-      request: updateSettingSchema,
-    })
+    router.get('/debug-info', [SystemController, 'getDebugInfo'])
+    router.get('/info', [SystemController, 'getSystemInfo'])
+    router.get('/internet-status', [SystemController, 'getInternetStatus'])
+    router.get('/services', [SystemController, 'getServices'])
+    router.post('/services/affect', [SystemController, 'affectService'])
+    router.post('/services/install', [SystemController, 'installService'])
+    router.post('/services/force-reinstall', [SystemController, 'forceReinstallService'])
+    router.post('/services/check-updates', [SystemController, 'checkServiceUpdates'])
+    router.get('/services/preflight', [SystemController, 'preflightCheck'])
+    router.get('/services/suggest-port', [SystemController, 'suggestCustomPort'])
+    router.post('/services/preflight-custom', [SystemController, 'preflightCustomApp'])
+    router.post('/services/custom', [SystemController, 'createCustomApp'])
+    router.put('/services/custom', [SystemController, 'updateCustomApp'])
+    router.post('/services/custom/update', [SystemController, 'updateCustomApp_pullLatest'])
+    router.delete('/services/custom', [SystemController, 'deleteCustomApp'])
+    router.get('/services/custom/:name', [SystemController, 'getCustomApp'])
+    router.get('/services/:name/logs', [SystemController, 'getServiceLogs'])
+    router.get('/services/:name/stats', [SystemController, 'getServiceStats'])
+    router.get('/services/:name/available-versions', [SystemController, 'getAvailableVersions'])
+    router.post('/services/update', [SystemController, 'updateService'])
+    router.post('/subscribe-release-notes', [SystemController, 'subscribeToReleaseNotes'])
+    router.get('/latest-version', [SystemController, 'checkLatestVersion'])
+    router.post('/update', [SystemController, 'requestSystemUpdate'])
+    router.get('/update/status', [SystemController, 'getSystemUpdateStatus'])
+    router.get('/update/logs', [SystemController, 'getSystemUpdateLogs'])
+    router.get('/settings', [SettingsController, 'getSetting'])
+    router.patch('/settings', [SettingsController, 'updateSetting'])
   })
   .prefix('/api/system')
 

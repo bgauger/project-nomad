@@ -75,25 +75,8 @@ export default class Service extends BaseModel {
   })
   declare is_custom: boolean
 
-  @column({
-    serialize(value) {
-      return Boolean(value)
-    },
-  })
-  declare is_user_modified: boolean
-
   @column()
   declare category: string | null
-
-  // When true the service is sunset: hidden from the install catalog unless it is already
-  // installed (see SystemService.getServices). Lets a deprecated app stay manageable for users who
-  // still run it while keeping new users from installing it.
-  @column({
-    serialize(value) {
-      return Boolean(value)
-    },
-  })
-  declare is_deprecated: boolean
 
   @column()
   declare source_repo: string | null
