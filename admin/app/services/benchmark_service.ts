@@ -151,6 +151,61 @@ const MEMORY_BENCHMARK_THREADS = 4
 // AI is measured as the median of N runs (W7) to damp per-run inference jitter.
 const AI_BENCHMARK_RUNS = 3
 
+/**
+ * Does `ai.remoteOllamaUrl` point back at the machine NOMAD itself runs on?
+ *
+ * The submission gate exists because a remote AI host makes the AI channel
+ * describe someone else's hardware. That reasoning does not apply when the
+ * "remote" host is this same box — the commonest case being Ollama installed
+ * natively on the host while NOMAD runs in Docker, which is how the AI
+ * assistant is expected to work on macOS.
+ *
+ * `host.docker.internal` is the meaningful entry: from inside the admin
+ * container it resolves to the host, and it is the form the setup flow accepts
+ * for a native host install. Loopback is included for completeness (it only
+ * reaches the container itself, so it is unlikely to have been saved, but it
+ * unambiguously is not another machine).
+ *
+ * A LAN address is DELIBERATELY NOT exempt. `192.168.1.50` is indistinguishable
+ * from another box on the same network, and wrongly exempting one would let a
+ * genuinely remote GPU's throughput be attributed to this hardware. False
+ * blocks are recoverable by clearing the setting; a false pass silently
+ * corrupts the leaderboard.
+ */
+function isSelfHostedOllamaUrl(rawUrl: string): boolean {
+  let host: string
+  try {
+    host = new URL(rawUrl.trim()).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  if (host === 'host.docker.internal' || host === 'gateway.docker.internal') return true
+  if (host === 'localhost' || host === '::1' || host === '[::1]') return true
+  // 127.0.0.0/8 — the whole loopback range, not just 127.0.0.1.
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true
+  return false
+}
+
+/**
+ * Is this GPU "model" a placeholder rather than a real name?
+ *
+ * systeminformation resolves PCI ids against the container's pci.ids database.
+ * When a card is newer than that file it reports the raw id verbatim — an RTX
+ * 5060 comes back as "Device 2d05". Vendor detection still succeeds, so these
+ * strings otherwise pass as legitimate model names and reach the leaderboard.
+ *
+ * Matches the "Device <hex>" shape plus the empty/unknown cases. Deliberately
+ * narrow: it must never reject a real product name, and no shipping GPU is
+ * called "Device" followed by four hex digits.
+ */
+function isUnresolvedGpuModel(model: string): boolean {
+  const s = model.trim()
+  if (s === '') return true
+  if (/^device\s+[0-9a-f]{4}$/i.test(s)) return true
+  if (/^unknown$/i.test(s)) return true
+  return false
+}
+
 // Minimum free disk required before pulling the AI model on first run. llama3.1:8b
 // (Q4) is ~4.9 GB; this covers the model plus headroom for the transient sysbench
 // disk-test file and normal slack. Only enforced when the model isn't already cached.
@@ -289,12 +344,25 @@ export class BenchmarkService {
     //
     // Blocks submission only — running the benchmark locally is still useful to
     // the operator, it just isn't a result about this box.
+    // A "remote" host that points back at this same machine is not remote. The
+    // AI ran on the hardware being submitted, so blocking it is a false
+    // positive — see isSelfHostedOllamaUrl for which forms qualify and why a
+    // LAN address deliberately does not.
     const remoteOllamaUrl = await KVStore.getValue('ai.remoteOllamaUrl')
-    if (remoteOllamaUrl) {
+    if (remoteOllamaUrl && isSelfHostedOllamaUrl(remoteOllamaUrl)) {
+      logger.info(
+        `[BenchmarkService] ai.remoteOllamaUrl (${remoteOllamaUrl}) points at this machine; treating the AI result as local for submission purposes`
+      )
+    } else if (remoteOllamaUrl) {
       throw new Error(
-        'This NOMAD is configured to use a remote AI host, so its AI results measure that machine rather than this one. ' +
-          'Leaderboard results must be measured entirely on the submitting hardware. ' +
-          'To share a result, install the local AI Assistant and run a Full Benchmark.'
+        // Name the setting and where it lives. The previous wording told the
+        // user to install the AI Assistant, but configuring a remote host
+        // already marks it installed — so it sent them looking for something
+        // they believe they have, and never mentioned the one thing that fixes
+        // it.
+        'This NOMAD is set to use a remote AI host, so the AI portion of this benchmark measured that machine, not this one. ' +
+          'Leaderboard results have to be measured entirely on the hardware being submitted. ' +
+          'To share a result, clear the remote host under Settings → Models so AI runs locally, then run a Full Benchmark.'
       )
     }
 
@@ -510,6 +578,24 @@ export class BenchmarkService {
         gpuModel = discreteGpu?.model || graphics.controllers[0]?.model || null
       }
 
+      // si.graphics() resolves PCI IDs against the container's pci.ids database,
+      // which ages out. A card newer than that file comes back as the literal
+      // "Device <pciid>" — an RTX 5060 reports vendor "NVIDIA Corporation",
+      // model "Device 2d05", vram 32. The vendor string still matches, so the
+      // discrete-GPU finder above accepts it and the authoritative nvidia-smi
+      // path below is skipped by its `if (!gpuModel)` guard.
+      //
+      // That put "Device 2d05" on the public leaderboard, and it is exactly the
+      // newest hardware — the results people most want to show off, and the ones
+      // that anchor the top of the board — that hits this. Treat a placeholder
+      // as no answer so the real detection runs.
+      if (gpuModel && isUnresolvedGpuModel(gpuModel)) {
+        logger.info(
+          `[BenchmarkService] si.graphics() returned an unresolved PCI id ("${gpuModel}"); falling through to authoritative GPU detection`
+        )
+        gpuModel = null
+      }
+
       // Fallback: Check Docker for nvidia runtime and query GPU model via nvidia-smi
       if (!gpuModel) {
         try {
@@ -559,7 +645,10 @@ export class BenchmarkService {
           const systemService = new (await import('./system_service.js')).SystemService(this.dockerService)
           const sysInfo = await systemService.getSystemInfo()
           const sysGpuModel = sysInfo?.graphics?.controllers?.[0]?.model
-          if (sysGpuModel) {
+          // Same si.graphics() source as above, so it can carry the same
+          // placeholder — don't launder an unresolved PCI id in through the
+          // back door.
+          if (sysGpuModel && !isUnresolvedGpuModel(sysGpuModel)) {
             gpuModel = sysGpuModel
           }
         } catch (sysError: any) {
@@ -947,8 +1036,17 @@ export class BenchmarkService {
       // load the model and warm the context here, then time the median-of-N below.
       // Best-effort — a warm-up hiccup must not fail the run (the timed loop will
       // surface any real inference error). See issue #1139.
+      // Log the swallowed failure. Silently discarding it makes a run whose
+      // reproducibility guarantee did not actually apply indistinguishable from
+      // a clean one after the fact. Matches _unloadResidentModels, the sibling
+      // best-effort helper, which already warns on every swallowed error.
       this._updateStatus('running_ai', 'Warming up AI model...')
-      await this._runSingleAIInference(ollamaAPIURL).catch(() => null)
+      await this._runSingleAIInference(ollamaAPIURL).catch((error) => {
+        logger.warn(
+          `[BenchmarkService] AI warm-up failed (${error?.message ?? error}); the first timed run may be cold.`
+        )
+        return null
+      })
 
       // Run inference AI_BENCHMARK_RUNS times and take the median run by tok/s (W7).
       // A single inference is noisy (scheduler, thermal, cache); the median damps
